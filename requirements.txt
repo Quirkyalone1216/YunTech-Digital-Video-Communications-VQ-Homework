@@ -2,3 +2,5 @@ numpy
 pandas
 Pillow
 matplotlib
+faiss-cpu
+scikit-learn

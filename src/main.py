@@ -6,7 +6,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 from src.utils import load_image, image_to_vectors, mse, psnr
-from src.lbg import lbg
+from src.lbg import LBG
 from src.encoder import encode_image
 from src.decoder import decode_indices
 
@@ -16,6 +16,7 @@ from src.decoder import decode_indices
 BLOCK_SIZE = (4, 4)
 BLOCK_AREA = BLOCK_SIZE[0] * BLOCK_SIZE[1]
 NC_LIST = [128, 256, 512, 1024]
+PCA_DIM = 8               # PCA 降維後向量維度
 TRAIN_PATHS = ['./Img/Train/1.png', './Img/Train/3.png']
 TEST_PATHS  = ['./Img/Test/2.png', './Img/Test/4.png']
 
@@ -45,15 +46,18 @@ def load_training_vectors(paths, block_size):
     return np.vstack(vecs)
 
 
-def process_single_nc(vectors, nc, test_paths, block_size):
+def process_single_nc(vectors, nc, test_paths, block_size, pca_dim):
     """
-    對單一 Nc 執行 LBG 訓練，並對每張測試影像量化、重建，
-    分別量測 train time 和 per-image encode+decode time。
+    使用 Splitting+PCA+Faiss 訓練 codebook，
+    並對測試影像編碼、解碼，測量訓練時間
     回傳 metrics list。
     """
+    # 建立 LBG 物件
+    lbg = LBG(Nc=nc, epsilon=1e-4, max_iter=50, pca_dim=pca_dim)
+
     # 量測 codebook 訓練時間
     tic_train = time.time()
-    codebook, _ = lbg(vectors, nc)
+    codebook = lbg.fit(vectors)
     time_train = time.time() - tic_train
 
     # 存 codebook
@@ -61,18 +65,15 @@ def process_single_nc(vectors, nc, test_paths, block_size):
 
     results = []
     for tp in test_paths:
-        tic_img = time.time()
         img   = load_image(tp)
         idxs  = encode_image(img, codebook, block_size)
         recon = decode_indices(idxs, codebook, img.shape, block_size)
-        time_img = time.time() - tic_img
 
         name = os.path.basename(tp).replace('.png', f'_Nc{nc}.png')
         Image.fromarray(recon).save(f'{RECON_DIR}/{name}')
 
         m = mse(img, recon)
         p = psnr(img, recon)
-
         results.append((name, nc, m, p, time_train))
 
     return results
@@ -84,7 +85,7 @@ def run_experiments():
     training_vecs = load_training_vectors(TRAIN_PATHS, BLOCK_SIZE)
 
     for nc in NC_LIST:
-        metrics = process_single_nc(training_vecs, nc, TEST_PATHS, BLOCK_SIZE)
+        metrics = process_single_nc(training_vecs, nc, TEST_PATHS, BLOCK_SIZE, PCA_DIM)
         all_metrics.extend(metrics)
 
     df = pd.DataFrame(all_metrics,
