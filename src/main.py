@@ -20,12 +20,14 @@ PCA_DIM = 8               # PCA 降維後向量維度
 TRAIN_PATHS = ['./Img/Train/1.png', './Img/Train/3.png']
 TEST_PATHS  = ['./Img/Test/2.png', './Img/Test/4.png']
 
-# 輸出資料夾
-CODEBOOK_DIR = 'results/codebooks'
-RECON_DIR    = 'results/reconstructions'
-CSV_PATH     = 'results/metrics.csv'
-PLOT1_PATH   = 'results/PSNR_vs_bitrate.png'
-PLOT2_PATH   = 'results/Time_vs_Nc.png'
+# 輸出資料夾與檔案
+CODEBOOK_DIR    = 'results/codebooks'
+RECON_DIR       = 'results/reconstructions'
+CSV_PATH        = 'results/metrics.csv'
+PLOT1_PATH      = 'results/PSNR_vs_bitrate.png'
+PLOT2_PATH      = 'results/Time_vs_Nc.png'
+RD_CSV_PATH     = 'results/rd_curve.csv'
+RD_PLOT_PATH    = 'results/rd_curve.png'
 
 # -----------------------------
 # 功能函式定義
@@ -35,6 +37,7 @@ def ensure_dirs():
     """建立所需的結果資料夾"""
     os.makedirs(CODEBOOK_DIR, exist_ok=True)
     os.makedirs(RECON_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
 
 
 def load_training_vectors(paths, block_size):
@@ -49,32 +52,39 @@ def load_training_vectors(paths, block_size):
 def process_single_nc(vectors, nc, test_paths, block_size, pca_dim):
     """
     使用 Splitting+PCA+Faiss 訓練 codebook，
-    並對測試影像編碼、解碼，測量訓練時間
+    並對測試影像編碼、解碼，測量訓練時間、壓縮時間、解碼時間
     回傳 metrics list。
     """
-    # 建立 LBG 物件
-    lbg = LBG(Nc=nc, epsilon=1e-4, max_iter=50, pca_dim=pca_dim)
-
-    # 量測 codebook 訓練時間
+    # 訓練時間
     tic_train = time.time()
+    lbg = LBG(Nc=nc, epsilon=1e-4, max_iter=50, pca_dim=pca_dim)
     codebook = lbg.fit(vectors)
     time_train = time.time() - tic_train
-
-    # 存 codebook
     np.save(f'{CODEBOOK_DIR}/codebook_{nc}.npy', codebook)
 
     results = []
     for tp in test_paths:
-        img   = load_image(tp)
-        idxs  = encode_image(img, codebook, block_size)
-        recon = decode_indices(idxs, codebook, img.shape, block_size)
+        img = load_image(tp)
+        orig = os.path.basename(tp)
 
-        name = os.path.basename(tp).replace('.png', f'_Nc{nc}.png')
+        # 壓縮 (encode) 時間
+        tic_enc = time.time()
+        idxs = encode_image(img, codebook, block_size)
+        time_encode = time.time() - tic_enc
+
+        # 解碼 (decode) 時間
+        tic_dec = time.time()
+        recon = decode_indices(idxs, codebook, img.shape, block_size)
+        time_decode = time.time() - tic_dec
+
+        # 儲存重建影像
+        name = orig.replace('.png', f'_Nc{nc}.png')
         Image.fromarray(recon).save(f'{RECON_DIR}/{name}')
 
+        # 計算指標
         m = mse(img, recon)
         p = psnr(img, recon)
-        results.append((name, nc, m, p, time_train))
+        results.append((orig, nc, m, p, time_train, time_encode, time_decode))
 
     return results
 
@@ -89,58 +99,70 @@ def run_experiments():
         all_metrics.extend(metrics)
 
     df = pd.DataFrame(all_metrics,
-        columns=['file','Nc','MSE','PSNR','Time_train'])
+        columns=['file','Nc','MSE','PSNR','Time_train','Time_encode','Time_decode'])
     df.to_csv(CSV_PATH, index=False)
     return df
 
 
 def plot_results(df):
-    """根據結果 DataFrame 繪製並儲存圖表"""
+    """繪製 PSNR vs. Bit Rate 與 Training/Encode/Decode 時間 vs. Nc 圖表"""
     df['bits_per_index'] = np.ceil(np.log2(df['Nc']))
     df['bitrate_bpp']    = df['bits_per_index'] / BLOCK_AREA
 
-    summary = df.groupby('Nc').agg({
-        'bitrate_bpp': 'mean',
-        'PSNR': 'mean',
-        'Time_train': 'mean'
-    }).reset_index()
-
-    # 純文字輸出
-    print("\n===== PSNR vs. Bitrate =====")
-    print(summary[['Nc','bitrate_bpp','PSNR']].to_string(
-        index=False, header=["Nc","Bitrate(bpp)","PSNR(dB)"]))
-    print("\n===== Training Time vs. Nc =====")
-    print(summary[['Nc','Time_train']].to_string(
-        index=False, header=["Nc","Train(s)"]))
-    print()
-
-    # PSNR vs. Bitrate 圖
+    # PSNR vs. Bit Rate
+    summary = df.groupby('Nc').agg({'bitrate_bpp':'mean','PSNR':'mean'}).reset_index()
     plt.figure(figsize=(8,4))
-    plt.scatter(summary['bitrate_bpp'], summary['PSNR'])
+    plt.plot(summary['bitrate_bpp'], summary['PSNR'], marker='o')
     for _, row in summary.iterrows():
-        plt.text(row['bitrate_bpp'], row['PSNR'], f"Nc={int(row['Nc'])}",
-                 fontsize=9, va='bottom', ha='right')
+        plt.text(row['bitrate_bpp'], row['PSNR'], f"Nc={row['Nc']}\nPSNR={row['PSNR']:.2f}",
+                 fontsize=8, va='bottom', ha='right')
     plt.xlabel('Bit Rate (bits/pixel)')
     plt.ylabel('PSNR (dB)')
-    plt.title('PSNR vs. Bitrate')
+    plt.title('PSNR vs. Bit Rate')
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(PLOT1_PATH)
     plt.show()
 
-    # Training Time vs. Nc 圖
+    # 時間 vs. Nc
+    time_summary = df.groupby('Nc').agg({
+        'Time_train':'mean','Time_encode':'mean','Time_decode':'mean'
+    }).reset_index()
     plt.figure(figsize=(8,4))
-    plt.plot(summary['Nc'], summary['Time_train'], marker='o')
-    for _, row in summary.iterrows():
-        plt.text(row['Nc'], row['Time_train'], f"Nc={int(row['Nc'])}", fontsize=9, va='bottom', ha='right')
+    plt.plot(time_summary['Nc'], time_summary['Time_train'], marker='o', label='Training')
+    for _, row in time_summary.iterrows():
+        plt.text(row['Nc'], row['Time_train'], f"{row['Time_train']:.2f}s", fontsize=7, va='bottom', ha='right')
     plt.xlabel('Codebook Size Nc')
-    plt.ylabel('Training Time (s)')
-    plt.title('LBG Training Time vs. Nc')
+    plt.ylabel('Time (s)')
+    plt.title('Processing Time vs. Codebook Size')
+    plt.legend()
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(PLOT2_PATH)
     plt.show()
 
+
+def export_rd_curve(df):
+    """計算並匯出 RD Curve 並在圖上標示每點數值"""
+    # 保留與 csv 相同
+    df['bpp'] = np.log2(df['Nc']) / BLOCK_AREA
+    df[['file','bpp','PSNR']].to_csv(RD_CSV_PATH, index=False)
+
+    plt.figure(figsize=(8,4))
+    for fname, grp in df.groupby('file'):
+        grp_sorted = grp.sort_values('bpp')
+        plt.plot(grp_sorted['bpp'], grp_sorted['PSNR'], marker='o', label=fname)
+        for _, row in grp_sorted.iterrows():
+            plt.text(row['bpp'], row['PSNR'], f"Nc={row['Nc']}\n{row['PSNR']:.2f}dB", fontsize=7,
+                     va='bottom', ha='left')
+    plt.xlabel('Bit Rate (bits/pixel)')
+    plt.ylabel('PSNR (dB)')
+    plt.title('PSNR vs. Bit Rate for Each Test Image')
+    plt.legend(title='Test Image')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(RD_PLOT_PATH)
+    plt.show()
 
 # -----------------------------
 # 主程式
@@ -150,3 +172,4 @@ if __name__ == '__main__':
     df = run_experiments()
     print("完成！結果儲存在 results/ 下面。")
     plot_results(df)
+    export_rd_curve(df)
