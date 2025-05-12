@@ -5,10 +5,10 @@ import pandas as pd
 from PIL import Image
 import matplotlib.pyplot as plt
 
-from src.utils import load_image, image_to_vectors, mse, psnr
-from src.lbg import LBG
-from src.encoder import encode_image
-from src.decoder import decode_indices
+from utils import load_image, image_to_vectors, mse, psnr
+from lbg import LBG
+from encoder import encode_image
+from decoder import decode_indices
 
 # -----------------------------
 # 設定區

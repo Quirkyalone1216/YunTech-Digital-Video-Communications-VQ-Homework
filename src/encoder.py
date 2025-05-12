@@ -1,4 +1,4 @@
-from src.utils import image_to_vectors
+from utils import image_to_vectors
 
 import numpy as np
 
