@@ -153,13 +153,15 @@ def export_rd_curve(df):
         grp_sorted = grp.sort_values('bpp')
         plt.plot(grp_sorted['bpp'], grp_sorted['PSNR'], marker='o', label=fname)
         for _, row in grp_sorted.iterrows():
-            plt.text(row['bpp'], row['PSNR'], f"Nc={row['Nc']}\n{row['PSNR']:.2f}dB", fontsize=7,
+            plt.text(row['bpp'], row['PSNR'], f"Nc={row['Nc']}\n{row['PSNR']:.2f}dB", fontsize=15,
                      va='bottom', ha='left')
     plt.xlabel('Bit Rate (bits/pixel)')
     plt.ylabel('PSNR (dB)')
-    plt.title('PSNR vs. Bit Rate for Each Test Image')
+    plt.title('PSNR vs. Bit Rate')
     plt.legend(title='Test Image')
     plt.grid(True)
+    # 新增：固定 y 軸範圍為 25–50 dB
+    plt.ylim(25, 50)
     plt.tight_layout()
     plt.savefig(RD_PLOT_PATH)
     plt.show()
